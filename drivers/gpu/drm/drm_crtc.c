@@ -5326,3 +5326,196 @@ struct drm_property *drm_mode_create_rotation_property(struct drm_device *dev,
 					   supported_rotations);
 }
 EXPORT_SYMBOL(drm_mode_create_rotation_property);
+
+#include <drm/drm_atomic.h>
+
+int drm_mode_atomic_ioctl(struct drm_device *dev,
+			  void *data, struct drm_file *file_priv)
+{
+	struct drm_mode_atomic *arg = data;
+	uint32_t __user *objs_ptr = (uint32_t __user *)(unsigned long)(arg->objs_ptr);
+	uint32_t __user *count_props_ptr = (uint32_t __user *)(unsigned long)(arg->count_props_ptr);
+	uint32_t __user *props_ptr = (uint32_t __user *)(unsigned long)(arg->props_ptr);
+	uint64_t __user *prop_values_ptr = (uint64_t __user *)(unsigned long)(arg->prop_values_ptr);
+	uint64_t __user *blob_values_ptr = (uint64_t __user *)(unsigned long)(arg->blob_values_ptr);
+	unsigned int copied_objs, copied_props, copied_blobs;
+	struct drm_atomic_state *state;
+	struct drm_modeset_acquire_ctx ctx;
+	int ret = 0;
+	unsigned int i, j;
+
+	if (arg->flags & ~DRM_MODE_ATOMIC_FLAGS)
+		return -EINVAL;
+
+	/* can't test and expect an event at the same time. */
+	if ((arg->flags & DRM_MODE_ATOMIC_TEST_ONLY) &&
+			(arg->flags & DRM_MODE_PAGE_FLIP_EVENT))
+		return -EINVAL;
+
+	drm_modeset_acquire_init(&ctx, 0);
+
+	state = drm_atomic_state_alloc(dev);
+	if (!state)
+		return -ENOMEM;
+
+	state->acquire_ctx = &ctx;
+
+retry:
+	copied_objs = 0;
+	copied_props = 0;
+	copied_blobs = 0;
+
+	for (i = 0; i < arg->count_objs; i++) {
+		uint32_t obj_id, count_props;
+		struct drm_mode_object *obj;
+
+		if (get_user(obj_id, objs_ptr + copied_objs)) {
+			ret = -EFAULT;
+			goto fail;
+		}
+
+		obj = drm_mode_object_find(dev, obj_id, DRM_MODE_OBJECT_ANY);
+		if (!obj || !obj->properties) {
+			ret = -ENOENT;
+			goto fail;
+		}
+
+		if ((obj->type == DRM_MODE_OBJECT_CRTC) &&
+				(arg->flags & DRM_MODE_PAGE_FLIP_EVENT)) {
+// XXX current atomic wants us to set this on the crtc..  hmm :-/
+//			struct drm_pending_vblank_event *e =
+//				create_vblank_event(dev, file_priv, arg->user_data);
+//			if (!e) {
+//				ret = -ENOMEM;
+//				goto fail;
+//			}
+//			ret = dev->driver->atomic_set_event(dev, state, obj, e);
+//			if (ret) {
+//				destroy_vblank_event(dev, file_priv, e);
+//				goto fail;
+//			}
+		}
+
+		if (get_user(count_props, count_props_ptr + copied_objs)) {
+			ret = -EFAULT;
+			goto fail;
+		}
+
+		copied_objs++;
+
+		for (j = 0; j < count_props; j++) {
+			uint32_t prop_id;
+			uint64_t prop_value;
+			struct drm_property *prop;
+			void *blob_data = NULL;
+
+			if (get_user(prop_id, props_ptr + copied_props)) {
+				ret = -EFAULT;
+				goto fail;
+			}
+
+			prop = drm_property_find(dev, prop_id);
+			if (!prop) {
+				ret = -ENOENT;
+				goto fail;
+			}
+
+			if (get_user(prop_value, prop_values_ptr + copied_props)) {
+				ret = -EFAULT;
+				goto fail;
+			}
+
+			if (!drm_property_change_is_valid(prop, prop_value)) {
+				ret = -EINVAL;
+				goto fail;
+			}
+
+			if ((prop->flags & DRM_MODE_PROP_BLOB) && prop_value) {
+				uint64_t blob_ptr;
+
+				if (get_user(blob_ptr, blob_values_ptr + copied_blobs)) {
+					ret = -EFAULT;
+					goto fail;
+				}
+
+				blob_data = kmalloc(prop_value, GFP_KERNEL);
+				if (!blob_data) {
+					ret = -ENOMEM;
+					goto fail;
+				}
+
+				if (copy_from_user(blob_data, (void __user *)(unsigned long)blob_ptr, prop_value)) {
+					kfree(blob_data);
+					ret = -EFAULT;
+					goto fail;
+				}
+			}
+
+			/* User space sends the blob pointer even if we
+			 * don't use it (length==0).
+			 */
+			if (prop->flags & DRM_MODE_PROP_BLOB)
+				copied_blobs++;
+
+			/* The driver will be in charge of blob_data from now on. */
+WARN_ON(blob_data); // TODO
+
+			switch (obj->type) {
+			case DRM_MODE_OBJECT_CONNECTOR: {
+				struct drm_connector *connector = obj_to_connector(obj);
+				struct drm_connector_state *connector_state =
+						drm_atomic_get_connector_state(state, connector);
+				ret = connector->funcs->atomic_set_property(connector,
+						connector_state, prop, prop_value);
+				break;
+			}
+			case DRM_MODE_OBJECT_CRTC: {
+				struct drm_crtc *crtc = obj_to_crtc(obj);
+				struct drm_crtc_state *crtc_state =
+						drm_atomic_get_crtc_state(state, crtc);
+				ret = crtc->funcs->atomic_set_property(crtc,
+						crtc_state, prop, prop_value);
+				break;
+			}
+			case DRM_MODE_OBJECT_PLANE: {
+				struct drm_plane *plane = obj_to_plane(obj);
+				struct drm_plane_state *plane_state =
+						drm_atomic_get_plane_state(state, plane);
+				ret = plane->funcs->atomic_set_property(plane,
+						plane_state, prop, prop_value);
+				break;
+			}
+			default:
+				ret = -EINVAL;
+				break;
+			}
+			if (ret)
+				goto fail;
+
+			copied_props++;
+		}
+	}
+
+	if (arg->flags & DRM_MODE_ATOMIC_TEST_ONLY) {
+		ret = drm_atomic_check_only(state);
+	} else if (arg->flags & DRM_MODE_ATOMIC_NONBLOCK) {
+		ret = drm_atomic_async_commit(state);
+	} else {
+		ret = drm_atomic_commit(state);
+	}
+
+fail:
+	if (ret == -EDEADLK)
+		goto backoff;
+
+	drm_atomic_state_free(state);
+	drm_modeset_acquire_fini(&ctx);
+
+	return ret;
+
+backoff:
+	drm_atomic_state_clear(state);
+	drm_modeset_backoff(&ctx);
+
+	goto retry;
+}
