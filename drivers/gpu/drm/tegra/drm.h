@@ -289,7 +289,7 @@ int tegra_dpaux_train(struct tegra_dpaux *dpaux, struct drm_dp_link *link,
 struct tegra_bo *tegra_fb_get_plane(struct drm_framebuffer *framebuffer,
 				    unsigned int index);
 bool tegra_fb_is_bottom_up(struct drm_framebuffer *framebuffer);
-int tegra_fb_get_tiling(struct drm_framebuffer *framebuffer,
+void tegra_fb_get_tiling(struct drm_framebuffer *framebuffer,
 			struct tegra_bo_tiling *tiling);
 int tegra_drm_fb_prepare(struct drm_device *drm);
 void tegra_drm_fb_free(struct drm_device *drm);

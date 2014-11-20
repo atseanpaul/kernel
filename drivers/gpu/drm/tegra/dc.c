@@ -403,9 +403,7 @@ static int tegra_primary_plane_update(struct drm_plane *plane,
 	window.bits_per_pixel = fb->bits_per_pixel;
 	window.bottom_up = tegra_fb_is_bottom_up(fb);
 
-	err = tegra_fb_get_tiling(fb, &window.tiling);
-	if (err < 0)
-		return err;
+	tegra_fb_get_tiling(fb, &window.tiling);
 
 	window.base[0] = bo->paddr + fb->offsets[0];
 	window.stride[0] = fb->pitches[0];
@@ -595,7 +593,6 @@ static int tegra_overlay_plane_update(struct drm_plane *plane,
 	struct tegra_dc *dc = to_tegra_dc(crtc);
 	struct tegra_dc_window window;
 	unsigned int i;
-	int err;
 
 	memset(&window, 0, sizeof(window));
 	window.src.x = src_x >> 16;
@@ -610,9 +607,7 @@ static int tegra_overlay_plane_update(struct drm_plane *plane,
 	window.bits_per_pixel = fb->bits_per_pixel;
 	window.bottom_up = tegra_fb_is_bottom_up(fb);
 
-	err = tegra_fb_get_tiling(fb, &window.tiling);
-	if (err < 0)
-		return err;
+	tegra_fb_get_tiling(fb, &window.tiling);
 
 	for (i = 0; i < drm_format_num_planes(fb->pixel_format); i++) {
 		struct tegra_bo *bo = tegra_fb_get_plane(fb, i);
@@ -708,11 +703,8 @@ static int tegra_dc_set_base(struct tegra_dc *dc, int x, int y,
 	struct tegra_bo_tiling tiling;
 	unsigned int format, swap;
 	unsigned long value, flags;
-	int err;
 
-	err = tegra_fb_get_tiling(fb, &tiling);
-	if (err < 0)
-		return err;
+	tegra_fb_get_tiling(fb, &tiling);
 
 	spin_lock_irqsave(&dc->lock, flags);
 	tegra_dc_writel(dc, WINDOW_A_SELECT, DC_CMD_DISPLAY_WINDOW_HEADER);
