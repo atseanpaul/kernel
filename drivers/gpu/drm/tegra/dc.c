@@ -366,6 +366,9 @@ static void tegra_plane_destroy(struct drm_plane *plane)
 {
 	struct tegra_plane *p = to_tegra_plane(plane);
 
+	if (plane->type != DRM_PLANE_TYPE_CURSOR)
+		tegra_window_plane_disable(plane);
+
 	drm_plane_cleanup(plane);
 	kfree(p);
 }
@@ -415,16 +418,10 @@ static int tegra_primary_plane_update(struct drm_plane *plane,
 	return 0;
 }
 
-static void tegra_primary_plane_destroy(struct drm_plane *plane)
-{
-	tegra_window_plane_disable(plane);
-	tegra_plane_destroy(plane);
-}
-
 static const struct drm_plane_funcs tegra_primary_plane_funcs = {
 	.update_plane = tegra_primary_plane_update,
 	.disable_plane = tegra_window_plane_disable,
-	.destroy = tegra_primary_plane_destroy,
+	.destroy = tegra_plane_destroy,
 };
 
 static struct drm_plane *tegra_dc_primary_plane_create(struct drm_device *drm,
@@ -630,16 +627,10 @@ static int tegra_overlay_plane_update(struct drm_plane *plane,
 	return tegra_dc_setup_window(dc, p->index, &window);
 }
 
-static void tegra_overlay_plane_destroy(struct drm_plane *plane)
-{
-	tegra_window_plane_disable(plane);
-	tegra_plane_destroy(plane);
-}
-
 static const struct drm_plane_funcs tegra_overlay_plane_funcs = {
 	.update_plane = tegra_overlay_plane_update,
 	.disable_plane = tegra_window_plane_disable,
-	.destroy = tegra_overlay_plane_destroy,
+	.destroy = tegra_plane_destroy,
 };
 
 static const uint32_t tegra_overlay_plane_formats[] = {
