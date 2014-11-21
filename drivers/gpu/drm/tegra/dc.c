@@ -339,12 +339,13 @@ static void tegra_dc_setup_window(struct tegra_dc *dc, unsigned int index,
 static int tegra_window_plane_disable(struct drm_plane *plane,
 				      struct drm_plane_state *old_state)
 {
-	struct tegra_dc *dc = to_tegra_dc(plane->crtc);
+	struct tegra_dc *dc = old_state->crtc ? to_tegra_dc(old_state->crtc) :
+					NULL;
 	struct tegra_plane *p = to_tegra_plane(plane);
 	u32 value;
 	unsigned long flags;
 
-	if (!plane->crtc)
+	if (!dc)
 		return 0;
 
 	spin_lock_irqsave(&dc->lock, flags);
@@ -378,51 +379,87 @@ static const u32 tegra_primary_plane_formats[] = {
 	DRM_FORMAT_RGB565,
 };
 
-static int tegra_primary_plane_update(struct drm_plane *plane,
-				      struct drm_crtc *crtc,
-				      struct drm_framebuffer *fb, int crtc_x,
-				      int crtc_y, unsigned int crtc_w,
-				      unsigned int crtc_h, uint32_t src_x,
-				      uint32_t src_y, uint32_t src_w,
-				      uint32_t src_h)
+static const struct drm_plane_funcs tegra_plane_funcs = {
+	.update_plane = drm_plane_helper_update,
+	.disable_plane = drm_plane_helper_disable,
+	.destroy = tegra_plane_destroy,
+};
+
+static int tegra_plane_atomic_check(struct drm_plane *plane,
+		struct drm_plane_state *state)
 {
-	struct tegra_bo *bo = tegra_fb_get_plane(fb, 0);
+	struct drm_crtc *crtc = state->crtc;
+	struct tegra_dc *dc = crtc ? to_tegra_dc(crtc) : NULL;
+	struct drm_framebuffer *fb = state->fb;
+	struct tegra_bo_tiling tiling;
+
+	if (!fb)
+		return 0;
+
+	/* Tegra doesn't support different strides for U and V planes */
+	if (drm_format_num_planes(fb->pixel_format) >= 3) {
+		if (fb->pitches[1] != fb->pitches[2]) {
+			DRM_ERROR("unsupported UV-plane configuration\n");
+			return -ENOTSUPP;
+		}
+	}
+
+	if (dc && !dc->soc->supports_block_linear) {
+		tegra_fb_get_tiling(state->fb, &tiling);
+
+		if (tiling.mode == TEGRA_BO_TILING_MODE_BLOCK) {
+			DRM_ERROR("hw doesn't support block linear mode\n");
+			return -ENOTSUPP;
+		}
+	}
+
+	return 0;
+}
+
+static void tegra_plane_atomic_update(struct drm_plane *plane,
+			struct drm_plane_state *old_state)
+{
 	struct tegra_plane *p = to_tegra_plane(plane);
-	struct tegra_dc *dc = to_tegra_dc(crtc);
+	struct drm_plane_state *plane_state = plane->state;
+	struct drm_crtc *crtc = plane_state->crtc;
+	struct drm_framebuffer *fb = plane_state->fb;
+	struct tegra_dc *dc = crtc ? to_tegra_dc(crtc) : NULL;
 	struct tegra_dc_window window;
+	unsigned int i;
+
+	if (!crtc || !fb) {
+		tegra_window_plane_disable(plane, old_state);
+		return;
+	}
 
 	memset(&window, 0, sizeof(window));
-	window.src.x = src_x >> 16;
-	window.src.y = src_y >> 16;
-	window.src.w = src_w >> 16;
-	window.src.h = src_h >> 16;
-	window.dst.x = crtc_x;
-	window.dst.y = crtc_y;
-	window.dst.w = crtc_w;
-	window.dst.h = crtc_h;
+	window.src.x = plane_state->src_x >> 16;
+	window.src.y = plane_state->src_y >> 16;
+	window.src.w = plane_state->src_w >> 16;
+	window.src.h = plane_state->src_h >> 16;
+	window.dst.x = plane_state->crtc_x;
+	window.dst.y = plane_state->crtc_y;
+	window.dst.w = plane_state->crtc_w;
+	window.dst.h = plane_state->crtc_h;
 	window.format = tegra_dc_format(fb->pixel_format, &window.swap);
 	window.bits_per_pixel = fb->bits_per_pixel;
 	window.bottom_up = tegra_fb_is_bottom_up(fb);
 
 	tegra_fb_get_tiling(fb, &window.tiling);
 
-	window.base[0] = bo->paddr + fb->offsets[0];
-	window.stride[0] = fb->pitches[0];
+	for (i = 0; i < drm_format_num_planes(fb->pixel_format); i++) {
+		struct tegra_bo *bo = tegra_fb_get_plane(fb, i);
+
+		window.base[i] = bo->paddr + fb->offsets[i];
+		window.stride[i] = fb->pitches[i];
+	}
 
 	tegra_dc_setup_window(dc, p->index, &window);
-
-	return 0;
 }
 
-static int tegra_primary_plane_disable(struct drm_plane *plane)
-{
-	return tegra_window_plane_disable(plane, plane->state);
-}
-
-static const struct drm_plane_funcs tegra_primary_plane_funcs = {
-	.update_plane = tegra_primary_plane_update,
-	.disable_plane = tegra_primary_plane_disable,
-	.destroy = tegra_plane_destroy,
+static const struct drm_plane_helper_funcs tegra_plane_helper_funcs = {
+	.atomic_check = tegra_plane_atomic_check,
+	.atomic_update = tegra_plane_atomic_update,
 };
 
 static struct drm_plane *tegra_dc_primary_plane_create(struct drm_device *drm,
@@ -441,12 +478,13 @@ static struct drm_plane *tegra_dc_primary_plane_create(struct drm_device *drm,
 	formats = tegra_primary_plane_formats;
 
 	err = drm_universal_plane_init(drm, &plane->base, 1 << dc->pipe,
-				       &tegra_primary_plane_funcs, formats,
+				       &tegra_plane_funcs, formats,
 				       num_formats, DRM_PLANE_TYPE_PRIMARY);
 	if (err < 0) {
 		kfree(plane);
 		return ERR_PTR(err);
 	}
+	drm_plane_helper_add(&plane->base, &tegra_plane_helper_funcs);
 
 	return &plane->base;
 }
@@ -579,89 +617,6 @@ static struct drm_plane *tegra_dc_cursor_plane_create(struct drm_device *drm,
 	return &plane->base;
 }
 
-static const struct drm_plane_funcs tegra_overlay_plane_funcs = {
-	.update_plane = drm_plane_helper_update,
-	.disable_plane = drm_plane_helper_disable,
-	.destroy = tegra_plane_destroy,
-};
-
-static int tegra_plane_atomic_check(struct drm_plane *plane,
-		struct drm_plane_state *state)
-{
-	struct drm_crtc *crtc = state->crtc;
-	struct tegra_dc *dc = crtc ? to_tegra_dc(crtc) : NULL;
-	struct drm_framebuffer *fb = state->fb;
-	struct tegra_bo_tiling tiling;
-
-	if (!fb)
-		return 0;
-
-	/* Tegra doesn't support different strides for U and V planes */
-	if (drm_format_num_planes(fb->pixel_format) >= 3) {
-		if (fb->pitches[1] != fb->pitches[2]) {
-			DRM_ERROR("unsupported UV-plane configuration\n");
-			return -ENOTSUPP;
-		}
-	}
-
-	if (dc && !dc->soc->supports_block_linear) {
-		tegra_fb_get_tiling(state->fb, &tiling);
-
-		if (tiling.mode == TEGRA_BO_TILING_MODE_BLOCK) {
-			DRM_ERROR("hw doesn't support block linear mode\n");
-			return -ENOTSUPP;
-		}
-	}
-
-	return 0;
-}
-
-static void tegra_plane_atomic_update(struct drm_plane *plane,
-				      struct drm_plane_state *old_state)
-{
-	struct tegra_plane *p = to_tegra_plane(plane);
-	struct drm_plane_state *plane_state = plane->state;
-	struct drm_crtc *crtc = plane_state->crtc;
-	struct drm_framebuffer *fb = plane_state->fb;
-	struct tegra_dc *dc = crtc ? to_tegra_dc(crtc) : NULL;
-	struct tegra_dc_window window;
-	unsigned int i;
-
-	if (!crtc || !fb) {
-		tegra_window_plane_disable(plane, old_state);
-		return;
-	}
-
-	memset(&window, 0, sizeof(window));
-	window.src.x = plane_state->src_x >> 16;
-	window.src.y = plane_state->src_y >> 16;
-	window.src.w = plane_state->src_w >> 16;
-	window.src.h = plane_state->src_h >> 16;
-	window.dst.x = plane_state->crtc_x;
-	window.dst.y = plane_state->crtc_y;
-	window.dst.w = plane_state->crtc_w;
-	window.dst.h = plane_state->crtc_h;
-	window.format = tegra_dc_format(fb->pixel_format, &window.swap);
-	window.bits_per_pixel = fb->bits_per_pixel;
-	window.bottom_up = tegra_fb_is_bottom_up(fb);
-
-	tegra_fb_get_tiling(fb, &window.tiling);
-
-	for (i = 0; i < drm_format_num_planes(fb->pixel_format); i++) {
-		struct tegra_bo *bo = tegra_fb_get_plane(fb, i);
-
-		window.base[i] = bo->paddr + fb->offsets[i];
-		window.stride[i] = fb->pitches[i];
-	}
-
-	tegra_dc_setup_window(dc, p->index, &window);
-}
-
-static const struct drm_plane_helper_funcs tegra_overlay_plane_helper_funcs = {
-	.atomic_check = tegra_plane_atomic_check,
-	.atomic_update = tegra_plane_atomic_update,
-};
-
 static const uint32_t tegra_overlay_plane_formats[] = {
 	DRM_FORMAT_XBGR8888,
 	DRM_FORMAT_XRGB8888,
@@ -691,13 +646,13 @@ static struct drm_plane *tegra_dc_overlay_plane_create(struct drm_device *drm,
 	formats = tegra_overlay_plane_formats;
 
 	err = drm_universal_plane_init(drm, &plane->base, 1 << dc->pipe,
-				       &tegra_overlay_plane_funcs, formats,
+				       &tegra_plane_funcs, formats,
 				       num_formats, DRM_PLANE_TYPE_OVERLAY);
 	if (err < 0) {
 		kfree(plane);
 		return ERR_PTR(err);
 	}
-	drm_plane_helper_add(&plane->base, &tegra_overlay_plane_helper_funcs);
+	drm_plane_helper_add(&plane->base, &tegra_plane_helper_funcs);
 
 	return &plane->base;
 }
