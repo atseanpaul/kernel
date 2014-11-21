@@ -493,27 +493,69 @@ static const u32 tegra_cursor_plane_formats[] = {
 	DRM_FORMAT_RGBA8888,
 };
 
-static int tegra_cursor_plane_update(struct drm_plane *plane,
-				     struct drm_crtc *crtc,
-				     struct drm_framebuffer *fb, int crtc_x,
-				     int crtc_y, unsigned int crtc_w,
-				     unsigned int crtc_h, uint32_t src_x,
-				     uint32_t src_y, uint32_t src_w,
-				     uint32_t src_h)
+static int tegra_cursor_plane_disable(struct drm_plane *plane,
+				struct drm_plane_state *old_state)
 {
-	struct tegra_bo *bo = tegra_fb_get_plane(fb, 0);
-	struct tegra_dc *dc = to_tegra_dc(crtc);
-	u32 value = CURSOR_CLIP_DISPLAY;
+	struct tegra_dc *dc = old_state->crtc ? to_tegra_dc(old_state->crtc) :
+					NULL;
+	u32 value;
+
+	if (!dc)
+		return 0;
+
+	value = tegra_dc_readl(dc, DC_DISP_DISP_WIN_OPTIONS);
+	value &= ~CURSOR_ENABLE;
+	tegra_dc_writel(dc, value, DC_DISP_DISP_WIN_OPTIONS);
+
+	tegra_dc_cursor_commit(dc);
+	tegra_dc_commit(dc);
+
+	return 0;
+}
+
+static const struct drm_plane_funcs tegra_cursor_plane_funcs = {
+	.update_plane = drm_plane_helper_update,
+	.disable_plane = drm_plane_helper_disable,
+	.destroy = tegra_plane_destroy,
+};
+
+int tegra_cursor_plane_atomic_check(struct drm_plane *plane,
+		struct drm_plane_state *state)
+{
+	if (!state->fb)
+		return 0;
 
 	/* scaling not supported for cursor */
-	if ((src_w >> 16 != crtc_w) || (src_h >> 16 != crtc_h))
-		return -EINVAL;
+	if ((state->src_w >> 16 != state->crtc_w) ||
+	    (state->src_h >> 16 != state->crtc_h))
+		return -ENOTSUPP;
 
 	/* only square cursors supported */
-	if (src_w != src_h)
-		return -EINVAL;
+	if (state->src_w != state->src_h)
+		return -ENOTSUPP;
 
-	switch (crtc_w) {
+	/* check if w is one of (32, 64, 128, 256) */
+	if (!(state->crtc_w & 0x1E0) || (state->crtc_w & (state->crtc_w - 1)))
+		return -ENOTSUPP;
+
+	return 0;
+}
+
+void tegra_cursor_plane_atomic_update(struct drm_plane *plane,
+			struct drm_plane_state *old_state)
+{
+	struct drm_plane_state *state = plane->state;
+	struct drm_framebuffer *fb = state->fb;
+	struct tegra_bo *bo = fb ? tegra_fb_get_plane(fb, 0) : NULL;
+	struct tegra_dc *dc = state->crtc ? to_tegra_dc(state->crtc) : NULL;
+	u32 value = CURSOR_CLIP_DISPLAY;
+
+	if (!fb || !state->crtc) {
+		tegra_cursor_plane_disable(plane, old_state);
+		return;
+	}
+
+	switch (state->crtc_w) {
 	case 32:
 		value |= CURSOR_SIZE_32x32;
 		break;
@@ -529,9 +571,6 @@ static int tegra_cursor_plane_update(struct drm_plane *plane,
 	case 256:
 		value |= CURSOR_SIZE_256x256;
 		break;
-
-	default:
-		return -EINVAL;
 	}
 
 	value |= (bo->paddr >> 10) & 0x3fffff;
@@ -557,38 +596,17 @@ static int tegra_cursor_plane_update(struct drm_plane *plane,
 	tegra_dc_writel(dc, value, DC_DISP_BLEND_CURSOR_CONTROL);
 
 	/* position the cursor */
-	value = (crtc_y & 0x3fff) << 16 | (crtc_x & 0x3fff);
+	value = (state->crtc_y & 0x3fff) << 16 | (state->crtc_x & 0x3fff);
 	tegra_dc_writel(dc, value, DC_DISP_CURSOR_POSITION);
 
 	/* apply changes */
 	tegra_dc_cursor_commit(dc);
 	tegra_dc_commit(dc);
-
-	return 0;
 }
 
-static int tegra_cursor_plane_disable(struct drm_plane *plane)
-{
-	struct tegra_dc *dc = to_tegra_dc(plane->crtc);
-	u32 value;
-
-	if (!plane->crtc)
-		return 0;
-
-	value = tegra_dc_readl(dc, DC_DISP_DISP_WIN_OPTIONS);
-	value &= ~CURSOR_ENABLE;
-	tegra_dc_writel(dc, value, DC_DISP_DISP_WIN_OPTIONS);
-
-	tegra_dc_cursor_commit(dc);
-	tegra_dc_commit(dc);
-
-	return 0;
-}
-
-static const struct drm_plane_funcs tegra_cursor_plane_funcs = {
-	.update_plane = tegra_cursor_plane_update,
-	.disable_plane = tegra_cursor_plane_disable,
-	.destroy = tegra_plane_destroy,
+static const struct drm_plane_helper_funcs tegra_cursor_plane_helper_funcs = {
+	.atomic_check = tegra_cursor_plane_atomic_check,
+	.atomic_update = tegra_cursor_plane_atomic_update,
 };
 
 static struct drm_plane *tegra_dc_cursor_plane_create(struct drm_device *drm,
@@ -613,6 +631,7 @@ static struct drm_plane *tegra_dc_cursor_plane_create(struct drm_device *drm,
 		kfree(plane);
 		return ERR_PTR(err);
 	}
+	drm_plane_helper_add(&plane->base, &tegra_cursor_plane_helper_funcs);
 
 	return &plane->base;
 }
