@@ -937,7 +937,7 @@ static int tegra_dc_set_timings(struct tegra_dc *dc,
 	return 0;
 }
 
-static int tegra_crtc_setup_clk(struct drm_crtc *crtc,
+static void tegra_crtc_setup_clk(struct drm_crtc *crtc,
 				struct drm_display_mode *mode)
 {
 	unsigned long pclk = mode->clock * 1000;
@@ -946,7 +946,6 @@ static int tegra_crtc_setup_clk(struct drm_crtc *crtc,
 	struct drm_encoder *encoder;
 	unsigned int div;
 	u32 value;
-	long err;
 
 	list_for_each_entry(encoder, &crtc->dev->mode_config.encoder_list, head)
 		if (encoder->crtc == crtc) {
@@ -954,46 +953,30 @@ static int tegra_crtc_setup_clk(struct drm_crtc *crtc,
 			break;
 		}
 
-	if (!output)
-		return -ENODEV;
+	if (WARN_ON(!output))
+		return;
 
 	/*
 	 * This assumes that the parent clock is pll_d_out0 or pll_d2_out
 	 * respectively, each of which divides the base pll_d by 2.
 	 */
-	err = tegra_output_setup_clock(output, dc->clk, pclk, &div);
-	if (err < 0) {
-		dev_err(dc->dev, "failed to setup clock: %ld\n", err);
-		return err;
-	}
+	WARN_ON(tegra_output_setup_clock(output, dc->clk, pclk, &div));
 
 	DRM_DEBUG_KMS("rate: %lu, div: %u\n", clk_get_rate(dc->clk), div);
 
 	value = SHIFT_CLK_DIVIDER(div) | PIXEL_CLK_DIVIDER_PCD1;
 	tegra_dc_writel(dc, value, DC_DISP_DISP_CLOCK_CONTROL);
-
-	return 0;
 }
 
-static int tegra_crtc_mode_set(struct drm_crtc *crtc,
-			       struct drm_display_mode *mode,
-			       struct drm_display_mode *adjusted,
-			       int x, int y, struct drm_framebuffer *old_fb)
+static void tegra_crtc_mode_set_nofb(struct drm_crtc *crtc)
 {
-	struct tegra_bo *bo = tegra_fb_get_plane(crtc->primary->fb, 0);
 	struct tegra_dc *dc = to_tegra_dc(crtc);
-	struct tegra_dc_window window;
 	u32 value;
-	int err;
 
-	err = tegra_crtc_setup_clk(crtc, mode);
-	if (err) {
-		dev_err(dc->dev, "failed to setup clock for CRTC: %d\n", err);
-		return err;
-	}
+	tegra_crtc_setup_clk(crtc, &crtc->state->mode);
 
 	/* program display mode */
-	tegra_dc_set_timings(dc, mode);
+	tegra_dc_set_timings(dc, &crtc->state->mode);
 
 	/* interlacing isn't supported yet, so disable it */
 	if (dc->soc->supports_interlacing) {
@@ -1001,34 +984,6 @@ static int tegra_crtc_mode_set(struct drm_crtc *crtc,
 		value &= ~INTERLACE_ENABLE;
 		tegra_dc_writel(dc, value, DC_DISP_INTERLACE_CONTROL);
 	}
-
-	/* setup window parameters */
-	memset(&window, 0, sizeof(window));
-	window.src.x = 0;
-	window.src.y = 0;
-	window.src.w = mode->hdisplay;
-	window.src.h = mode->vdisplay;
-	window.dst.x = 0;
-	window.dst.y = 0;
-	window.dst.w = mode->hdisplay;
-	window.dst.h = mode->vdisplay;
-	window.format = tegra_dc_format(crtc->primary->fb->pixel_format,
-					&window.swap);
-	window.bits_per_pixel = crtc->primary->fb->bits_per_pixel;
-	window.stride[0] = crtc->primary->fb->pitches[0];
-	window.base[0] = bo->paddr;
-
-	tegra_dc_setup_window(dc, 0, &window);
-
-	return 0;
-}
-
-static int tegra_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
-				    struct drm_framebuffer *old_fb)
-{
-	struct tegra_dc *dc = to_tegra_dc(crtc);
-
-	return tegra_dc_set_base(dc, x, y, crtc->primary->fb);
 }
 
 static void tegra_crtc_prepare(struct drm_crtc *crtc)
@@ -1112,8 +1067,9 @@ static void tegra_crtc_load_lut(struct drm_crtc *crtc)
 static const struct drm_crtc_helper_funcs tegra_crtc_helper_funcs = {
 	.disable = tegra_crtc_disable,
 	.mode_fixup = tegra_crtc_mode_fixup,
-	.mode_set = tegra_crtc_mode_set,
-	.mode_set_base = tegra_crtc_mode_set_base,
+	.mode_set = drm_helper_crtc_mode_set,
+	.mode_set_base = drm_helper_crtc_mode_set_base,
+	.mode_set_nofb = tegra_crtc_mode_set_nofb,
 	.prepare = tegra_crtc_prepare,
 	.commit = tegra_crtc_commit,
 	.atomic_check = tegra_crtc_atomic_check,
