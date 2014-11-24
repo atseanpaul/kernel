@@ -199,7 +199,7 @@ static int mdp5_plane_atomic_check(struct drm_plane *plane,
 		to_mdp5_plane_state(state)->mode_changed = true;
 	}
 
-	return 0;
+	return drm_atomic_helper_plane_check(plane, state);
 }
 
 static void mdp5_plane_atomic_update(struct drm_plane *plane)

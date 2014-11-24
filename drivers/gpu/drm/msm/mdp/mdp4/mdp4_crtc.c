@@ -342,7 +342,7 @@ static int mdp4_crtc_atomic_check(struct drm_crtc *crtc,
 
 	// TODO anything else to check?
 
-	return 0;
+	return drm_atomic_helper_crtc_check(crtc, state);
 }
 
 static void mdp4_crtc_atomic_begin(struct drm_crtc *crtc)

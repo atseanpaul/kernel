@@ -349,7 +349,7 @@ static int mdp5_crtc_atomic_check(struct drm_crtc *crtc,
 				pstates[i].state->stage);
 	}
 
-	return 0;
+	return drm_atomic_helper_crtc_check(crtc, state);
 }
 
 static void mdp5_crtc_atomic_begin(struct drm_crtc *crtc)
