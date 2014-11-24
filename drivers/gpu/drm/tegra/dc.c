@@ -332,7 +332,6 @@ static void tegra_dc_setup_window(struct tegra_dc *dc, unsigned int index,
 		break;
 	}
 
-	tegra_dc_window_commit(dc, index);
 	spin_unlock_irqrestore(&dc->lock, flags);
 }
 
@@ -356,7 +355,6 @@ static int tegra_window_plane_disable(struct drm_plane *plane,
 	value &= ~WIN_ENABLE;
 	tegra_dc_writel(dc, value, DC_WIN_WIN_OPTIONS);
 
-	tegra_dc_window_commit(dc, p->index);
 	spin_unlock_irqrestore(&dc->lock, flags);
 
 	return 0;
@@ -507,9 +505,6 @@ static int tegra_cursor_plane_disable(struct drm_plane *plane,
 	value &= ~CURSOR_ENABLE;
 	tegra_dc_writel(dc, value, DC_DISP_DISP_WIN_OPTIONS);
 
-	tegra_dc_cursor_commit(dc);
-	tegra_dc_commit(dc);
-
 	return 0;
 }
 
@@ -598,10 +593,6 @@ void tegra_cursor_plane_atomic_update(struct drm_plane *plane,
 	/* position the cursor */
 	value = (state->crtc_y & 0x3fff) << 16 | (state->crtc_x & 0x3fff);
 	tegra_dc_writel(dc, value, DC_DISP_CURSOR_POSITION);
-
-	/* apply changes */
-	tegra_dc_cursor_commit(dc);
-	tegra_dc_commit(dc);
 }
 
 static const struct drm_plane_helper_funcs tegra_cursor_plane_helper_funcs = {
@@ -891,7 +882,6 @@ static const struct drm_crtc_funcs tegra_crtc_funcs = {
 
 static void tegra_crtc_disable(struct drm_crtc *crtc)
 {
-	struct tegra_dc *dc = to_tegra_dc(crtc);
 	struct drm_device *drm = crtc->dev;
 	struct drm_plane *plane;
 
@@ -908,7 +898,6 @@ static void tegra_crtc_disable(struct drm_crtc *crtc)
 	}
 
 	drm_crtc_vblank_off(crtc);
-	tegra_dc_commit(dc);
 }
 
 static bool tegra_crtc_mode_fixup(struct drm_crtc *crtc,
@@ -1094,6 +1083,28 @@ static void tegra_crtc_commit(struct drm_crtc *crtc)
 	tegra_dc_commit(dc);
 }
 
+static int tegra_crtc_atomic_check(struct drm_crtc *crtc,
+			struct drm_crtc_state *state)
+{
+	return 0;
+}
+
+static void tegra_crtc_atomic_begin(struct drm_crtc *crtc)
+{
+}
+
+static void tegra_crtc_atomic_flush(struct drm_crtc *crtc)
+{
+	struct tegra_dc *dc = to_tegra_dc(crtc);
+	int i;
+
+	for (i = 0; i < 3; i++)
+		tegra_dc_window_commit(dc, i);
+
+	tegra_dc_cursor_commit(dc);
+	tegra_dc_commit(dc);
+}
+
 static void tegra_crtc_load_lut(struct drm_crtc *crtc)
 {
 }
@@ -1105,6 +1116,9 @@ static const struct drm_crtc_helper_funcs tegra_crtc_helper_funcs = {
 	.mode_set_base = tegra_crtc_mode_set_base,
 	.prepare = tegra_crtc_prepare,
 	.commit = tegra_crtc_commit,
+	.atomic_check = tegra_crtc_atomic_check,
+	.atomic_begin = tegra_crtc_atomic_begin,
+	.atomic_flush = tegra_crtc_atomic_flush,
 	.load_lut = tegra_crtc_load_lut,
 };
 
