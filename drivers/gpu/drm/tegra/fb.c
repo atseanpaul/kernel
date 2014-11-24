@@ -13,6 +13,9 @@
 #include "drm.h"
 #include "gem.h"
 
+#include <drm/drm_crtc.h>
+#include <linux/workqueue.h>
+
 static inline struct tegra_fb *to_tegra_fb(struct drm_framebuffer *fb)
 {
 	return container_of(fb, struct tegra_fb, base);
@@ -389,6 +392,8 @@ static const struct drm_mode_config_funcs tegra_drm_mode_funcs = {
 #ifdef CONFIG_DRM_TEGRA_FBDEV
 	.output_poll_changed = tegra_fb_output_poll_changed,
 #endif
+	.atomic_check = drm_atomic_helper_check,
+	.atomic_commit = tegra_drm_atomic_commit,
 };
 
 int tegra_drm_fb_prepare(struct drm_device *drm)

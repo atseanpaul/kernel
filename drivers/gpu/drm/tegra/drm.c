@@ -20,6 +20,8 @@
 #define DRIVER_MINOR 0
 #define DRIVER_PATCHLEVEL 0
 
+static void tegra_drm_atomic_commit_worker(struct work_struct *work);
+
 struct tegra_drm_file {
 	struct list_head contexts;
 };
@@ -46,6 +48,8 @@ static int tegra_drm_load(struct drm_device *drm, unsigned long flags)
 	}
 
 	mutex_init(&tegra->clients_lock);
+	mutex_init(&tegra->commit_lock);
+	INIT_WORK(&tegra->commit_work, tegra_drm_atomic_commit_worker);
 	INIT_LIST_HEAD(&tegra->clients);
 	drm->dev_private = tegra;
 	tegra->drm = drm;
@@ -791,6 +795,69 @@ static void tegra_debugfs_cleanup(struct drm_minor *minor)
 				 ARRAY_SIZE(tegra_debugfs_list), minor);
 }
 #endif
+
+void tegra_drm_atomic_commit_worker(struct work_struct *work)
+{
+	struct tegra_drm *tegra =
+			container_of(work, struct tegra_drm, commit_work);
+	struct drm_device *drm = tegra->drm;
+
+	drm_atomic_helper_commit_pre_planes(drm, tegra->commit_state);
+
+	drm_atomic_helper_commit_planes(drm, tegra->commit_state);
+
+	drm_atomic_helper_commit_post_planes(drm, tegra->commit_state);
+
+	drm_atomic_helper_wait_for_vblanks(drm, tegra->commit_state);
+
+	drm_atomic_helper_cleanup_planes(drm, tegra->commit_state);
+
+	drm_atomic_state_free(tegra->commit_state);
+}
+
+static void tegra_drm_atomic_wait_for_workers(struct drm_device *drm)
+{
+	struct tegra_drm *tegra = drm->dev_private;
+
+	WARN_ON(!mutex_is_locked(&tegra->commit_lock));
+
+	flush_work(&tegra->commit_work);
+}
+
+int tegra_drm_atomic_commit(struct drm_device *drm,
+				   struct drm_atomic_state *state,
+				   bool async)
+{
+	struct tegra_drm *tegra = drm->dev_private;
+	int ret;
+
+	ret = drm_atomic_helper_prepare_planes(drm, state);
+	if (ret)
+		return ret;
+
+	mutex_lock(&tegra->commit_lock);
+
+	tegra_drm_atomic_wait_for_workers(drm);
+
+	tegra->commit_state = state;
+
+	/*
+	 * This is the point of no return - everything below never fails except
+	 * when the hw goes bonghits. Which means we can commit the new state on
+	 * the software side now.
+	 */
+
+	drm_atomic_helper_swap_state(drm, state);
+
+	schedule_work(&tegra->commit_work);
+
+	if (!async)
+		tegra_drm_atomic_wait_for_workers(drm);
+
+	mutex_unlock(&tegra->commit_lock);
+
+	return 0;
+}
 
 static struct drm_driver tegra_drm_driver = {
 	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_PRIME,

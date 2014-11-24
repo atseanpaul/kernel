@@ -25,6 +25,7 @@
 #include "gem.h"
 
 struct reset_control;
+struct work_struct;
 
 struct tegra_fb {
 	struct drm_framebuffer base;
@@ -47,6 +48,10 @@ struct tegra_drm {
 
 	struct mutex clients_lock;
 	struct list_head clients;
+
+	struct mutex commit_lock;
+	struct work_struct commit_work;
+	struct drm_atomic_state *commit_state;
 
 #ifdef CONFIG_DRM_TEGRA_FBDEV
 	struct tegra_fbdev *fbdev;
@@ -301,6 +306,9 @@ void tegra_drm_fb_exit(struct drm_device *drm);
 #ifdef CONFIG_DRM_TEGRA_FBDEV
 void tegra_fbdev_restore_mode(struct tegra_fbdev *fbdev);
 #endif
+int tegra_drm_atomic_commit(struct drm_device *drm,
+			    struct drm_atomic_state *state,
+			    bool async);
 
 extern struct platform_driver tegra_dc_driver;
 extern struct platform_driver tegra_dsi_driver;

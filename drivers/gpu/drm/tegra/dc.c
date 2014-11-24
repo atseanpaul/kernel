@@ -378,8 +378,8 @@ static const u32 tegra_primary_plane_formats[] = {
 };
 
 static const struct drm_plane_funcs tegra_plane_funcs = {
-	.update_plane = drm_plane_helper_update,
-	.disable_plane = drm_plane_helper_disable,
+	.update_plane = drm_atomic_helper_update_plane,
+	.disable_plane = drm_atomic_helper_disable_plane,
 	.reset = drm_atomic_helper_plane_reset,
 	.destroy = tegra_plane_destroy,
 	.atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
@@ -512,8 +512,8 @@ static int tegra_cursor_plane_disable(struct drm_plane *plane,
 }
 
 static const struct drm_plane_funcs tegra_cursor_plane_funcs = {
-	.update_plane = drm_plane_helper_update,
-	.disable_plane = drm_plane_helper_disable,
+	.update_plane = drm_atomic_helper_update_plane,
+	.disable_plane = drm_atomic_helper_disable_plane,
 	.reset = drm_atomic_helper_plane_reset,
 	.destroy = tegra_plane_destroy,
 	.atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
@@ -854,18 +854,17 @@ static int tegra_dc_page_flip(struct drm_crtc *crtc, struct drm_framebuffer *fb,
 	struct tegra_dc *dc = to_tegra_dc(crtc);
 	struct drm_device *drm = crtc->dev;
 
+	//TODO: XXX: Use crtc->state->event instead
 	if (dc->event)
 		return -EBUSY;
 
 	if (event) {
 		event->pipe = dc->pipe;
 		dc->event = event;
-		drm_vblank_get(drm, dc->pipe);
 	}
 
-	tegra_dc_set_base(dc, 0, 0, fb);
-	crtc->primary->fb = fb;
-	drm_atomic_set_fb_for_plane(crtc->primary->state, fb);
+	drm_vblank_get(drm, dc->pipe);
+	drm_atomic_helper_page_flip(crtc, fb, event, page_flip_flags);
 
 	return 0;
 }
@@ -883,7 +882,7 @@ static void tegra_dc_destroy(struct drm_crtc *crtc)
 
 static const struct drm_crtc_funcs tegra_crtc_funcs = {
 	.page_flip = tegra_dc_page_flip,
-	.set_config = drm_crtc_helper_set_config,
+	.set_config = drm_atomic_helper_set_config,
 	.reset = drm_atomic_helper_crtc_reset,
 	.destroy = tegra_dc_destroy,
 	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
