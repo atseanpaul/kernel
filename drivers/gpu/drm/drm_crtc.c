@@ -356,9 +356,6 @@ static struct drm_mode_object *_object_find(struct drm_device *dev,
 		obj = NULL;
 	if (obj && obj->id != id)
 		obj = NULL;
-	/* don't leak out unref'd fb's */
-	if (obj && (obj->type == DRM_MODE_OBJECT_FB))
-		obj = NULL;
 	mutex_unlock(&dev->mode_config.idr_mutex);
 
 	return obj;
@@ -5380,22 +5377,6 @@ retry:
 			goto fail;
 		}
 
-		if ((obj->type == DRM_MODE_OBJECT_CRTC) &&
-				(arg->flags & DRM_MODE_PAGE_FLIP_EVENT)) {
-// XXX current atomic wants us to set this on the crtc..  hmm :-/
-//			struct drm_pending_vblank_event *e =
-//				create_vblank_event(dev, file_priv, arg->user_data);
-//			if (!e) {
-//				ret = -ENOMEM;
-//				goto fail;
-//			}
-//			ret = dev->driver->atomic_set_event(dev, state, obj, e);
-//			if (ret) {
-//				destroy_vblank_event(dev, file_priv, e);
-//				goto fail;
-//			}
-		}
-
 		if (get_user(count_props, count_props_ptr + copied_objs)) {
 			ret = -EFAULT;
 			goto fail;
@@ -5496,19 +5477,45 @@ WARN_ON(blob_data); // TODO
 		}
 	}
 
+	if (arg->flags & DRM_MODE_PAGE_FLIP_EVENT) {
+		int ncrtcs = dev->mode_config.num_crtc;
+
+		for (i = 0; i < ncrtcs; i++) {
+			struct drm_crtc_state *crtc_state = state->crtc_states[i];
+			struct drm_pending_vblank_event *e;
+
+			if (!crtc_state)
+				continue;
+
+			e = create_vblank_event(dev, file_priv, arg->user_data);
+			if (!e) {
+				ret = -ENOMEM;
+				goto fail;
+			}
+
+			crtc_state->event = e;
+		}
+	}
+
 	if (arg->flags & DRM_MODE_ATOMIC_TEST_ONLY) {
 		ret = drm_atomic_check_only(state);
+		drm_atomic_state_free(state);
 	} else if (arg->flags & DRM_MODE_ATOMIC_NONBLOCK) {
 		ret = drm_atomic_async_commit(state);
 	} else {
 		ret = drm_atomic_commit(state);
 	}
 
+	drm_modeset_drop_locks(&ctx);
+	drm_modeset_acquire_fini(&ctx);
+
+	return ret;
 fail:
 	if (ret == -EDEADLK)
 		goto backoff;
 
 	drm_atomic_state_free(state);
+	drm_modeset_drop_locks(&ctx);
 	drm_modeset_acquire_fini(&ctx);
 
 	return ret;

@@ -61,7 +61,7 @@ drm_atomic_helper_plane_changed(struct drm_atomic_state *state,
 	struct drm_crtc_state *crtc_state;
 
 	if (plane->state->crtc) {
-		crtc_state = state->crtc_states[drm_crtc_index(plane->crtc)];
+		crtc_state = state->crtc_states[drm_crtc_index(plane->state->crtc)];
 
 		if (WARN_ON(!crtc_state))
 			return;
@@ -1243,11 +1243,18 @@ int drm_atomic_helper_disable_plane(struct drm_plane *plane)
 	struct drm_plane_state *plane_state;
 	int ret = 0;
 
+	/*
+	 * crtc helpers love to call disable functions for already disabled hw
+	 * functions. So cope with that.
+	 */
+	if (!plane->state->crtc)
+		return 0;
+
 	state = drm_atomic_state_alloc(plane->dev);
 	if (!state)
 		return -ENOMEM;
 
-	state->acquire_ctx = drm_modeset_legacy_acquire_ctx(plane->crtc);
+	state->acquire_ctx = drm_modeset_legacy_acquire_ctx(plane->state->crtc);
 retry:
 	plane_state = drm_atomic_get_plane_state(state, plane);
 	if (IS_ERR(plane_state)) {
