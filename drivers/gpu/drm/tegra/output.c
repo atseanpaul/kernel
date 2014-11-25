@@ -116,6 +116,8 @@ static const struct drm_connector_funcs connector_funcs = {
 	.detect = tegra_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = tegra_connector_destroy,
+	.atomic_set_property = drm_atomic_set_connector_property,
+	.atomic_get_property = drm_atomic_get_connector_property,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };

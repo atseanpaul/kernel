@@ -382,6 +382,8 @@ static const struct drm_plane_funcs tegra_plane_funcs = {
 	.disable_plane = drm_atomic_helper_disable_plane,
 	.reset = drm_atomic_helper_plane_reset,
 	.destroy = tegra_plane_destroy,
+	.atomic_set_property = drm_atomic_set_plane_property,
+	.atomic_get_property = drm_atomic_get_plane_property,
 	.atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_plane_destroy_state,
 };
@@ -516,6 +518,8 @@ static const struct drm_plane_funcs tegra_cursor_plane_funcs = {
 	.disable_plane = drm_atomic_helper_disable_plane,
 	.reset = drm_atomic_helper_plane_reset,
 	.destroy = tegra_plane_destroy,
+	.atomic_set_property = drm_atomic_set_plane_property,
+	.atomic_get_property = drm_atomic_get_plane_property,
 	.atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_plane_destroy_state,
 };
@@ -885,6 +889,8 @@ static const struct drm_crtc_funcs tegra_crtc_funcs = {
 	.set_config = drm_atomic_helper_set_config,
 	.reset = drm_atomic_helper_crtc_reset,
 	.destroy = tegra_dc_destroy,
+	.atomic_set_property = drm_atomic_set_crtc_property,
+	.atomic_get_property = drm_atomic_get_crtc_property,
 	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
 };
