@@ -723,7 +723,7 @@ static void tegra_dc_finish_page_flip(struct tegra_dc *dc)
 	unsigned long flags, base;
 	struct tegra_bo *bo;
 
-	if (!dc->event)
+	if (!crtc->state->event)
 		return;
 
 	bo = tegra_fb_get_plane(crtc->primary->state->fb, 0);
@@ -740,9 +740,9 @@ static void tegra_dc_finish_page_flip(struct tegra_dc *dc)
 
 	if (base == bo->paddr + crtc->primary->state->fb->offsets[0]) {
 		spin_lock_irqsave(&drm->event_lock, flags);
-		drm_send_vblank_event(drm, dc->pipe, dc->event);
+		drm_send_vblank_event(drm, dc->pipe, crtc->state->event);
 		drm_vblank_put(drm, dc->pipe);
-		dc->event = NULL;
+		crtc->state->event = NULL;
 		spin_unlock_irqrestore(&drm->event_lock, flags);
 	}
 }
@@ -755,10 +755,10 @@ void tegra_dc_cancel_page_flip(struct drm_crtc *crtc, struct drm_file *file)
 
 	spin_lock_irqsave(&drm->event_lock, flags);
 
-	if (dc->event && dc->event->base.file_priv == file) {
-		dc->event->base.destroy(&dc->event->base);
+	if (crtc->state->event && crtc->state->event->base.file_priv == file) {
+		crtc->state->event->base.destroy(&crtc->state->event->base);
 		drm_vblank_put(drm, dc->pipe);
-		dc->event = NULL;
+		crtc->state->event = NULL;
 	}
 
 	spin_unlock_irqrestore(&drm->event_lock, flags);
@@ -769,15 +769,6 @@ static int tegra_dc_page_flip(struct drm_crtc *crtc, struct drm_framebuffer *fb,
 {
 	struct tegra_dc *dc = to_tegra_dc(crtc);
 	struct drm_device *drm = crtc->dev;
-
-	//TODO: XXX: Use crtc->state->event instead
-	if (dc->event)
-		return -EBUSY;
-
-	if (event) {
-		event->pipe = dc->pipe;
-		dc->event = event;
-	}
 
 	drm_vblank_get(drm, dc->pipe);
 	drm_atomic_helper_page_flip(crtc, fb, event, page_flip_flags);

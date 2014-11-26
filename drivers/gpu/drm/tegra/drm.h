@@ -128,9 +128,6 @@ struct tegra_dc {
 	struct drm_minor *minor;
 	struct dentry *debugfs;
 
-	/* page-flip handling */
-	struct drm_pending_vblank_event *event;
-
 	const struct tegra_dc_soc_info *soc;
 
 	struct iommu_domain *domain;
